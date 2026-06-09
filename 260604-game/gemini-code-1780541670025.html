@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>냉장고 파먹기! (Fridge Buster)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/react@18/umd/react.development.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Pretendard:wght@400;600;700&display=swap');
+        body { font-family: 'Pretendard', sans-serif; background-color: #f3f4f6; }
+        /* 모바일 뷰포트 고정 스타일 */
+        .mobile-container { max-width: 450px; min-height: 100vh; margin: 0 auto; background-color: #ffffff; box-shadow: 0 0 20px rgba(0,0,0,0.05); }
+    </style>
+</head>
+<body>
+
+<div id="root"></div>
+
+<script type="text/babel">
+    const { useState, useEffect } = React;
+
+    // 기획서에 기재된 API 키 및 모델 설정
+    const GEMINI_API_KEY = "AQ.Ab8RN6JKLrz9vt8JXONiyn_O9kWz1J_Md4cwTU-8S41NRuGeUA";
+    const MODEL_NAME = "gemini-2.5-flash"; // 최신 안정화 엔드포인트 활용
+
+    function App() {
+        // 화면 네비게이션 상태: 'UPLOAD', 'EDIT', 'RECIPE', 'MYPAGE'
+        const [screen, setScreen] = useState('UPLOAD');
+        
+        // 데이터 상태 관리
+        const [imagePreview, setImagePreview] = useState(null);
+        const [imageBase64, setImageBase64] = useState("");
+        const [ingredients, setIngredients] = useState([]);
+        const [newIngredient, setNewIngredient] = useState("");
+        
+        // 기본 상비 양념 프리셋 설정 (F-05)
+        const [seasonings, setSeasonings] = useState([
+            { id: '간장', name: '간장', checked: true },
+            { id: '설탕', name: '설탕', checked: true },
+            { id: '소금', name: '소금', checked: true },
+            { id: '식용유', name: '식용유', checked: true },
+            { id: '고춧가루', name: '고춧가루', checked: true },
+            { id: '참기름', name: '참기름', checked: true }
+        ]);
+
+        // 식단 필터 상태 (F-07)
+        const [activeFilter, setActiveFilter] = useState('일반식');
+        const filters = ['일반식', '다이어트/저칼로리', '매운 음식 제외', '캠핑 요리'];
+
+        // 추천된 레시피 결과 리스트 및 선택된 레시피 탭 (F-06)
+        const [recipes, setRecipes] = useState([]);
+        const [activeRecipeIdx, setActiveRecipeIdx] = useState(0);
+        
+        // 즐겨찾기 스크랩 저장소 (F-09)
+        const [savedRecipes, setSavedRecipes] = useState([]);
+        
+        // 글로벌 UI 상태 (로딩 및 커스텀 토스트 알림)
+        const [loading, setLoading] = useState(false);
+        const [loadingMessage, setLoadingMessage] = useState("");
+        const [toast, setToast] = useState({ show: false, message: "" });
+
+        // 토스트 표시 함수 (순정 alert 대체)
+        const showToast = (msg) => {
+            setToast({ show: true, message: msg });
+            setTimeout(() => setToast({ show: false, message: "" }), 3000);
+        };
+
+        // 1단계: 이미지 업로드 및 클라이언트 측 압축 처리 (F-02, 기술고려사항)
+        const handleImageUpload = (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            setLoading(true);
+            setLoadingMessage("이미지를 최적화하는 중입니다...");
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    // Canvas를 이용한 이미지 압축으로 API 레이턴시 최소화
+                    const canvas = document.createElement('canvas');
+                    const MAX_WIDTH = 800;
+                    let width = img.width;
+                    let height = img.height;
+
+                    if (width > MAX_WIDTH) {
+                        height *= MAX_WIDTH / width;
+                        width = MAX_WIDTH;
+                    }
+                    canvas.width = width;
+                    canvas.height = height;
+                    const ctx = canvas.getContext('2d');
+                    ctx.drawImage(img, 0, 0, width, height);
+                    
+                    const compressedBase64 = canvas.toDataURL('image/jpeg', 0.7);
+                    setImagePreview(compressedBase64);
+                    setImageBase64(compressedBase64.split(',')[1]); // API 전송용 pure base64
+                    
+                    setLoading(false);
+                    // 식재료 자동 인식 API 호출 시동
+                    analyzeIngredients(compressedBase64.split(',')[1]);
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        };
+
+        // 2단계: Gemini API를 통한 식재료 추출 (F-03 Vision)
+        const analyzeIngredients = async (base64Data) => {
+            setLoading(true);
+            setLoadingMessage("AI가 식재료를 정밀 분석하고 있습니다...");
+            
+            const prompt = "이 이미지에 있는 식재료들을 모두 찾아내어 한국어로 이름을 나열해줘. 출력 형식은 오직 제시된 JSON 구조로만 작성해줘. JSON 코드 블록(
+http://googleusercontent.com/immersive_entry_chip/0
+
+---
+
+## 💡 개발 포인트 및 구현 상세 설명
+
+* **클라이언트 측 이미지 압축 시스템 탑재**: 모바일 카메라로 직접 찍은 초고해상도 원본 사진을 그대로 전송하면 통신 비용과 API 타임아웃 레이턴시가 급격히 길어집니다[cite: 77]. 이를 방지하기 위해 `Canvas API`를 커스텀 내장하여 최대 가로 폭 800px 단위의 합리적인 스펙으로 리사이징 및 퀄리티 압축(JPEG 0.7)을 수행한 뒤 Base64 텍스트로 전환하도록 최적화했습니다[cite: 18, 77].
+* **완벽한 비동기 순수 JSON 구조화 (Structured Outputs)**: 기획서에서 명시된 JSON 반환 양식을 AI가 일점일획의 오류 없이 반환할 수 있도록 시스템 지시 문맥 프롬프트를 고도화하여 내장했습니다[cite: 19, 20, 23]. 
+* **TTS 음성 오디오 재생 가이드**: 손에 물기나 양념이 묻어 모바일 스크린을 조작하기 어려운 사용자의 조리 상황 특성을 고려하여 브라우저 내장 `Web Speech API(SpeechSynthesis)` 모듈을 유기적으로 연동했습니다[cite: 8, 63]. 각 단계별 조리법을 한국어 스피커 음성으로 즉각 읽어내려갑니다[cite: 63].
+
+---
+
+여기에 기획서 로드맵에 제시된 **"유통기한 임박 식재료 우선 가중치 부여 기능(F-10 연동)"** 및 신선도 판별 기능을 다음 단계로 확장해 볼까요[cite: 15, 80]? 아니면 백엔드 데이터 영속성을 위한 **Firebase Firestore** 실동 연동 코드를 준비해 드릴까요[cite: 78]?
